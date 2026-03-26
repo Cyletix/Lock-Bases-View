@@ -28,12 +28,8 @@
    flex: 0 0 0 !important;
 }
 
-.lock-bases-view-locked .bases-view input,
-.lock-bases-view-locked .bases-view textarea,
-.lock-bases-view-locked .bases-view [contenteditable="true"] {
-   user-select: none !important;
-}
-
 .lock-bases-view-locked .bases-view .lock-bases-editor-cell-disabled {
    pointer-events: none !important;
+   box-sizing: border-box;
+   padding-inline: var(--size-4-2, 8px) !important;
 }

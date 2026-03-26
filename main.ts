@@ -1,7 +1,32 @@
-// @ts-nocheck
-import { getLanguage, Notice, Plugin, PluginSettingTab, setIcon, Setting } from 'obsidian';
+import { App, getLanguage, Notice, Plugin, PluginSettingTab, setIcon, Setting, TAbstractFile, TFile, View } from 'obsidian';
 
-const DEFAULT_SETTINGS = {
+interface LockBasesViewSettings {
+  lockedBases: Record<string, boolean>;
+  lockCheckboxes: boolean;
+}
+
+interface LockHandler {
+  name: string;
+  handler: EventListener;
+}
+
+interface LockState {
+  disabledCells: Element[];
+  processed: WeakSet<Element>;
+  handlers: LockHandler[];
+  observer?: MutationObserver;
+}
+
+interface LockOptions {
+  silent?: boolean;
+  persist?: boolean;
+}
+
+interface BasesView extends View {
+  file?: TFile | null;
+}
+
+const DEFAULT_SETTINGS: LockBasesViewSettings = {
   lockedBases: {},
   lockCheckboxes: true,
 };
@@ -37,10 +62,18 @@ const I18N = {
     settingLockCheckboxesName: 'チェックボックスもロックする',
     settingLockCheckboxesDesc: 'オフにすると、Bases ビューがロック中でもチェックボックスはクリックできます。',
   },
-};
+} as const;
+
+type Locale = keyof typeof I18N;
+type TranslationKey = keyof typeof I18N.en;
 
 export default class LockBasesView extends Plugin {
-  getLocale() {
+  settings!: LockBasesViewSettings;
+  basesObservers = new WeakMap<HTMLElement, MutationObserver>();
+  basesListeners = new WeakMap<HTMLElement, LockState>();
+  basesLocks = new WeakSet<BasesView>();
+
+  getLocale(): Locale {
     const language = String(getLanguage() || 'en').toLowerCase();
     if (language.startsWith('zh')) {
       return 'zh';
@@ -51,20 +84,20 @@ export default class LockBasesView extends Plugin {
     return 'en';
   }
 
-  t(key) {
+  t(key: TranslationKey): string {
     const locale = this.getLocale();
     return I18N[locale]?.[key] || I18N.en[key] || key;
   }
 
-  shouldLockCheckboxes() {
+  shouldLockCheckboxes(): boolean {
     return this.settings?.lockCheckboxes !== false;
   }
 
-  async saveSettings() {
+  async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
   }
 
-  isCheckboxElement(el) {
+  isCheckboxElement(el: unknown): el is Element {
     if (!el || !(el instanceof Element)) {
       return false;
     }
@@ -75,7 +108,7 @@ export default class LockBasesView extends Plugin {
     return !!label?.querySelector('input[type="checkbox"], [role="checkbox"], .checkbox-container');
   }
 
-  isCheckboxCell(el) {
+  isCheckboxCell(el: Element | null | undefined): boolean {
     if (!el || !(el instanceof Element)) {
       return false;
     }
@@ -89,7 +122,7 @@ export default class LockBasesView extends Plugin {
     return !!cell.querySelector('input[type="checkbox"], .metadata-input-checkbox, [role="checkbox"], .checkbox-container');
   }
 
-  hasBlockedEditableContent(root) {
+  hasBlockedEditableContent(root: Element | null | undefined): boolean {
     if (!root || !(root instanceof Element)) {
       return false;
     }
@@ -102,8 +135,8 @@ export default class LockBasesView extends Plugin {
     return !!root.querySelector(selector);
   }
 
-  getOpenBasesViews() {
-    const views = [];
+  getOpenBasesViews(): BasesView[] {
+    const views: BasesView[] = [];
     this.app.workspace.iterateAllLeaves((leaf) => {
       const view = leaf?.view;
       if (!view || !this.isBasesView(view) || views.includes(view)) {
@@ -114,7 +147,7 @@ export default class LockBasesView extends Plugin {
     return views;
   }
 
-  async refreshOpenBasesLocks() {
+  async refreshOpenBasesLocks(): Promise<void> {
     const views = this.getOpenBasesViews();
     for (const view of views) {
       if (this.basesLocks.has(view)) {
@@ -129,11 +162,33 @@ export default class LockBasesView extends Plugin {
     this.updateTitleButton();
   }
 
-  async onload() {
-    this.basesObservers = new WeakMap();
-    this.basesListeners = new WeakMap();
-    this.basesLocks = new WeakSet();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) || {});
+  async onload(): Promise<void> {
+    this.basesObservers = new WeakMap<HTMLElement, MutationObserver>();
+    this.basesListeners = new WeakMap<HTMLElement, LockState>();
+    this.basesLocks = new WeakSet<BasesView>();
+
+    const loaded = (await this.loadData()) as Partial<LockBasesViewSettings> | null;
+    this.settings = {
+      lockedBases: { ...DEFAULT_SETTINGS.lockedBases, ...(loaded?.lockedBases ?? {}) },
+      lockCheckboxes: loaded?.lockCheckboxes ?? DEFAULT_SETTINGS.lockCheckboxes,
+    };
+
+    this.registerEvent(this.app.vault.on('rename', async (file: TAbstractFile, oldPath: string) => {
+      if (!oldPath || !this.settings?.lockedBases?.[oldPath]) {
+        return;
+      }
+      this.settings.lockedBases[file.path] = this.settings.lockedBases[oldPath];
+      delete this.settings.lockedBases[oldPath];
+      await this.saveSettings();
+    }));
+
+    this.registerEvent(this.app.vault.on('delete', async (file: TAbstractFile) => {
+      if (!file?.path || !this.settings?.lockedBases?.[file.path]) {
+        return;
+      }
+      delete this.settings.lockedBases[file.path];
+      await this.saveSettings();
+    }));
 
     this.addSettingTab(new LockBasesViewSettingTab(this.app, this));
 
@@ -162,13 +217,17 @@ export default class LockBasesView extends Plugin {
     }, 200);
   }
 
-  onunload() {
-    this.basesObservers = new WeakMap();
-    this.basesListeners = new WeakMap();
-    this.basesLocks = new WeakSet();
+  onunload(): void {
+    for (const view of this.getOpenBasesViews()) {
+      this.cleanupViewLock(view);
+    }
+    document.querySelectorAll('.lock-bases-toolbar-item').forEach((el) => el.remove());
+    this.basesObservers = new WeakMap<HTMLElement, MutationObserver>();
+    this.basesListeners = new WeakMap<HTMLElement, LockState>();
+    this.basesLocks = new WeakSet<BasesView>();
   }
 
-  updateTitleButton() {
+  updateTitleButton(): void {
     const view = this.getActiveBasesView();
     if (!view || !view.containerEl || !this.isBasesView(view)) {
       return;
@@ -179,8 +238,8 @@ export default class LockBasesView extends Plugin {
       return;
     }
 
-    const existingBtn = toolbar.querySelector('.lock-bases-btn');
-    if (existingBtn) {
+    const existingBtn = toolbar.querySelector<HTMLElement>('.lock-bases-btn');
+    if (existingBtn instanceof HTMLElement) {
       this.updateToolbarButtonState(existingBtn, this.basesLocks.has(view));
       const existingItem = existingBtn.closest('.lock-bases-toolbar-item');
       const resultsItem = toolbar.querySelector('.bases-toolbar-results-menu');
@@ -223,7 +282,7 @@ export default class LockBasesView extends Plugin {
     }
   }
 
-  getBasesKey(view) {
+  getBasesKey(view: BasesView | null | undefined): string | null {
     if (!view) {
       return null;
     }
@@ -240,7 +299,7 @@ export default class LockBasesView extends Plugin {
     return title ? `${type}:${title}` : type;
   }
 
-  isPersistedLocked(view) {
+  isPersistedLocked(view: BasesView): boolean {
     const key = this.getBasesKey(view);
     if (!key) {
       return false;
@@ -248,13 +307,13 @@ export default class LockBasesView extends Plugin {
     return !!(this.settings && this.settings.lockedBases && this.settings.lockedBases[key]);
   }
 
-  async setPersistedLocked(view, locked) {
+  async setPersistedLocked(view: BasesView, locked: boolean): Promise<void> {
     const key = this.getBasesKey(view);
     if (!key) {
       return;
     }
     if (!this.settings) {
-      this.settings = { lockedBases: {} };
+      this.settings = { ...DEFAULT_SETTINGS };
     }
     if (!this.settings.lockedBases) {
       this.settings.lockedBases = {};
@@ -267,7 +326,7 @@ export default class LockBasesView extends Plugin {
     await this.saveData(this.settings);
   }
 
-  syncActiveBasesViewState() {
+  syncActiveBasesViewState(): void {
     const view = this.getActiveBasesView();
     if (!view || !this.isBasesView(view)) {
       return;
@@ -282,8 +341,8 @@ export default class LockBasesView extends Plugin {
     this.updateTitleButton();
   }
 
-  updateToolbarButtonState(button, isLocked) {
-    const icon = button.querySelector('.text-button-icon');
+  updateToolbarButtonState(button: HTMLElement, isLocked: boolean): void {
+    const icon = button.querySelector<HTMLElement>('.text-button-icon');
     if (icon) {
       icon.replaceChildren();
       setIcon(icon, isLocked ? 'lock' : 'lock-open');
@@ -294,16 +353,8 @@ export default class LockBasesView extends Plugin {
     button.classList.toggle('is-active', isLocked);
   }
 
-  getActiveBasesView() {
-    const workspace = this.app.workspace;
-    for (const view of this.getOpenBasesViews()) {
-      const workspaceLeaf = view.containerEl?.closest('.workspace-leaf');
-      if (workspaceLeaf?.classList.contains('mod-active')) {
-        return view;
-      }
-    }
-
-    const recentLeaf = workspace.getMostRecentLeaf();
+  getActiveBasesView(): BasesView | null {
+    const recentLeaf = this.app.workspace.getMostRecentLeaf();
     if (recentLeaf?.view && this.isBasesView(recentLeaf.view)) {
       return recentLeaf.view;
     }
@@ -311,9 +362,12 @@ export default class LockBasesView extends Plugin {
     return this.getOpenBasesViews()[0] || null;
   }
 
-  isBasesView(view) {
+  isBasesView(view: View | null | undefined): view is BasesView {
+    if (!view?.containerEl) {
+      return false;
+    }
     try {
-      if (view.getViewType && typeof view.getViewType === 'function') {
+      if (typeof view.getViewType === 'function') {
         const type = String(view.getViewType()).toLowerCase();
         if (type.includes('base')) {
           return true;
@@ -332,7 +386,7 @@ export default class LockBasesView extends Plugin {
     return false;
   }
 
-  async toggleBasesLock(view) {
+  async toggleBasesLock(view: BasesView): Promise<void> {
     if (this.basesLocks.has(view)) {
       await this.unlockBases(view);
     } else {
@@ -340,7 +394,7 @@ export default class LockBasesView extends Plugin {
     }
   }
 
-  isEditableElement(el) {
+  isEditableElement(el: EventTarget | null): boolean {
     if (!el || !(el instanceof Element)) {
       return false;
     }
@@ -360,7 +414,7 @@ export default class LockBasesView extends Plugin {
     return this.hasBlockedEditableContent(editorCell);
   }
 
-  releaseEditableFocus(basesRoot, target) {
+  releaseEditableFocus(basesRoot: Element, target?: EventTarget | null): void {
     const active = target || document.activeElement;
     if (!(active instanceof HTMLElement)) {
       return;
@@ -388,12 +442,12 @@ export default class LockBasesView extends Plugin {
     }
   }
 
-  applyLockDecorations(root, state) {
+  applyLockDecorations(root: Element, state: LockState): void {
     if (!root || !state) {
       return;
     }
 
-    const remember = (el) => {
+    const remember = (el: Element) => {
       if (!el || state.processed.has(el)) {
         return;
       }
@@ -401,7 +455,7 @@ export default class LockBasesView extends Plugin {
       state.disabledCells.push(el);
     };
 
-    const editorCells = root.querySelectorAll('.bases-table-cell:not(.bases-rendered-value)');
+    const editorCells = Array.from(root.querySelectorAll('.bases-table-cell:not(.bases-rendered-value)'));
     for (const cell of editorCells) {
       if (!this.shouldLockCheckboxes() && this.isCheckboxCell(cell)) {
         continue;
@@ -415,7 +469,7 @@ export default class LockBasesView extends Plugin {
 
   }
 
-  async lockBases(view, options = {}) {
+  async lockBases(view: BasesView, options: LockOptions = {}): Promise<void> {
     const { silent = false, persist = true } = options;
     const container = view.containerEl;
     if (!container) {
@@ -423,9 +477,9 @@ export default class LockBasesView extends Plugin {
     }
 
     container.classList.add('lock-bases-view-locked');
-    const basesRoot = container.querySelector('.bases-view') || container;
+    const basesRoot = container.querySelector<HTMLElement>('.bases-view') || container;
 
-    const state = {
+    const state: LockState = {
       disabledCells: [],
       processed: new WeakSet(),
       handlers: [],
@@ -434,7 +488,7 @@ export default class LockBasesView extends Plugin {
     this.applyLockDecorations(basesRoot, state);
     this.releaseEditableFocus(basesRoot);
 
-    const stopEvent = (event) => {
+    const stopEvent: EventListener = (event: Event) => {
       const target = event.target;
       if (!(target instanceof Element)) {
         return;
@@ -461,7 +515,7 @@ export default class LockBasesView extends Plugin {
 
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
+        for (const node of Array.from(mutation.addedNodes)) {
           if (!(node instanceof Element)) {
             continue;
           }
@@ -470,7 +524,6 @@ export default class LockBasesView extends Plugin {
       }
     });
 
-    observer.observe(basesRoot, { childList: true, subtree: true });
     state.observer = observer;
     this.basesObservers.set(container, observer);
     this.basesListeners.set(container, state);
@@ -484,9 +537,8 @@ export default class LockBasesView extends Plugin {
     this.updateTitleButton();
   }
 
-  async unlockBases(view, options = {}) {
-    const { silent = false, persist = true } = options;
-    const container = view.containerEl;
+  cleanupViewLock(view: BasesView | null | undefined): void {
+    const container = view?.containerEl;
     if (!container) {
       return;
     }
@@ -501,7 +553,7 @@ export default class LockBasesView extends Plugin {
 
     const state = this.basesListeners.get(container);
     if (state && Array.isArray(state.handlers)) {
-      const basesRoot = container.querySelector('.bases-view') || container;
+      const basesRoot = container.querySelector<HTMLElement>('.bases-view') || container;
       for (const item of state.handlers) {
         basesRoot.removeEventListener(item.name, item.handler, true);
       }
@@ -518,6 +570,15 @@ export default class LockBasesView extends Plugin {
 
     this.basesListeners.delete(container);
     this.basesLocks.delete(view);
+    this.updateTitleButton();
+  }
+
+  async unlockBases(view: BasesView, options: LockOptions = {}): Promise<void> {
+    const { silent = false, persist = true } = options;
+    if (!view?.containerEl) {
+      return;
+    }
+    this.cleanupViewLock(view);
     if (persist) {
       await this.setPersistedLocked(view, false);
     }
@@ -529,12 +590,14 @@ export default class LockBasesView extends Plugin {
 };
 
 class LockBasesViewSettingTab extends PluginSettingTab {
-  constructor(app, plugin) {
+  plugin: LockBasesView;
+
+  constructor(app: App, plugin: LockBasesView) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
-  display() {
+  display(): void {
     const { containerEl } = this;
     containerEl.empty();
 

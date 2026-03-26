@@ -60,6 +60,12 @@ var I18N = {
   }
 };
 var LockBasesView = class extends import_obsidian.Plugin {
+  constructor() {
+    super(...arguments);
+    this.basesObservers = /* @__PURE__ */ new WeakMap();
+    this.basesListeners = /* @__PURE__ */ new WeakMap();
+    this.basesLocks = /* @__PURE__ */ new WeakSet();
+  }
   getLocale() {
     const language = String((0, import_obsidian.getLanguage)() || "en").toLowerCase();
     if (language.startsWith("zh")) {
@@ -141,10 +147,32 @@ var LockBasesView = class extends import_obsidian.Plugin {
     this.updateTitleButton();
   }
   async onload() {
+    var _a, _b;
     this.basesObservers = /* @__PURE__ */ new WeakMap();
     this.basesListeners = /* @__PURE__ */ new WeakMap();
     this.basesLocks = /* @__PURE__ */ new WeakSet();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() || {});
+    const loaded = await this.loadData();
+    this.settings = {
+      lockedBases: { ...DEFAULT_SETTINGS.lockedBases, ...(_a = loaded == null ? void 0 : loaded.lockedBases) != null ? _a : {} },
+      lockCheckboxes: (_b = loaded == null ? void 0 : loaded.lockCheckboxes) != null ? _b : DEFAULT_SETTINGS.lockCheckboxes
+    };
+    this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
+      var _a2, _b2;
+      if (!oldPath || !((_b2 = (_a2 = this.settings) == null ? void 0 : _a2.lockedBases) == null ? void 0 : _b2[oldPath])) {
+        return;
+      }
+      this.settings.lockedBases[file.path] = this.settings.lockedBases[oldPath];
+      delete this.settings.lockedBases[oldPath];
+      await this.saveSettings();
+    }));
+    this.registerEvent(this.app.vault.on("delete", async (file) => {
+      var _a2, _b2;
+      if (!(file == null ? void 0 : file.path) || !((_b2 = (_a2 = this.settings) == null ? void 0 : _a2.lockedBases) == null ? void 0 : _b2[file.path])) {
+        return;
+      }
+      delete this.settings.lockedBases[file.path];
+      await this.saveSettings();
+    }));
     this.addSettingTab(new LockBasesViewSettingTab(this.app, this));
     this.addCommand({
       id: "toggle-bases-lock",
@@ -169,6 +197,10 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }, 200);
   }
   onunload() {
+    for (const view of this.getOpenBasesViews()) {
+      this.cleanupViewLock(view);
+    }
+    document.querySelectorAll(".lock-bases-toolbar-item").forEach((el) => el.remove());
     this.basesObservers = /* @__PURE__ */ new WeakMap();
     this.basesListeners = /* @__PURE__ */ new WeakMap();
     this.basesLocks = /* @__PURE__ */ new WeakSet();
@@ -183,7 +215,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
       return;
     }
     const existingBtn = toolbar.querySelector(".lock-bases-btn");
-    if (existingBtn) {
+    if (existingBtn instanceof HTMLElement) {
       this.updateToolbarButtonState(existingBtn, this.basesLocks.has(view));
       const existingItem = existingBtn.closest(".lock-bases-toolbar-item");
       const resultsItem2 = toolbar.querySelector(".bases-toolbar-results-menu");
@@ -248,7 +280,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
       return;
     }
     if (!this.settings) {
-      this.settings = { lockedBases: {} };
+      this.settings = { ...DEFAULT_SETTINGS };
     }
     if (!this.settings.lockedBases) {
       this.settings.lockedBases = {};
@@ -286,23 +318,18 @@ var LockBasesView = class extends import_obsidian.Plugin {
     button.classList.toggle("is-active", isLocked);
   }
   getActiveBasesView() {
-    var _a;
-    const workspace = this.app.workspace;
-    for (const view of this.getOpenBasesViews()) {
-      const workspaceLeaf = (_a = view.containerEl) == null ? void 0 : _a.closest(".workspace-leaf");
-      if (workspaceLeaf == null ? void 0 : workspaceLeaf.classList.contains("mod-active")) {
-        return view;
-      }
-    }
-    const recentLeaf = workspace.getMostRecentLeaf();
+    const recentLeaf = this.app.workspace.getMostRecentLeaf();
     if ((recentLeaf == null ? void 0 : recentLeaf.view) && this.isBasesView(recentLeaf.view)) {
       return recentLeaf.view;
     }
     return this.getOpenBasesViews()[0] || null;
   }
   isBasesView(view) {
+    if (!(view == null ? void 0 : view.containerEl)) {
+      return false;
+    }
     try {
-      if (view.getViewType && typeof view.getViewType === "function") {
+      if (typeof view.getViewType === "function") {
         const type = String(view.getViewType()).toLowerCase();
         if (type.includes("base")) {
           return true;
@@ -382,7 +409,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
       state.processed.add(el);
       state.disabledCells.push(el);
     };
-    const editorCells = root.querySelectorAll(".bases-table-cell:not(.bases-rendered-value)");
+    const editorCells = Array.from(root.querySelectorAll(".bases-table-cell:not(.bases-rendered-value)"));
     for (const cell of editorCells) {
       if (!this.shouldLockCheckboxes() && this.isCheckboxCell(cell)) {
         continue;
@@ -434,7 +461,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
+        for (const node of Array.from(mutation.addedNodes)) {
           if (!(node instanceof Element)) {
             continue;
           }
@@ -442,7 +469,6 @@ var LockBasesView = class extends import_obsidian.Plugin {
         }
       }
     });
-    observer.observe(basesRoot, { childList: true, subtree: true });
     state.observer = observer;
     this.basesObservers.set(container, observer);
     this.basesListeners.set(container, state);
@@ -455,9 +481,8 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }
     this.updateTitleButton();
   }
-  async unlockBases(view, options = {}) {
-    const { silent = false, persist = true } = options;
-    const container = view.containerEl;
+  cleanupViewLock(view) {
+    const container = view == null ? void 0 : view.containerEl;
     if (!container) {
       return;
     }
@@ -483,6 +508,14 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }
     this.basesListeners.delete(container);
     this.basesLocks.delete(view);
+    this.updateTitleButton();
+  }
+  async unlockBases(view, options = {}) {
+    const { silent = false, persist = true } = options;
+    if (!(view == null ? void 0 : view.containerEl)) {
+      return;
+    }
+    this.cleanupViewLock(view);
     if (persist) {
       await this.setPersistedLocked(view, false);
     }
