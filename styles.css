@@ -4,7 +4,7 @@
    border: none !important;
    box-shadow: none !important;
    border-radius: var(--tag-radius, 999px) !important;
-   padding: 2px 8px !important;
+   padding: 2px 6px !important;
    gap: 0 !important;
 }
 

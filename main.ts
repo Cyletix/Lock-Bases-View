@@ -11,7 +11,6 @@ interface LockHandler {
 }
 
 interface LockState {
-  disabledCells: Element[];
   processed: WeakSet<Element>;
   handlers: LockHandler[];
   observer?: MutationObserver;
@@ -30,6 +29,8 @@ const DEFAULT_SETTINGS: LockBasesViewSettings = {
   lockedBases: {},
   lockCheckboxes: true,
 };
+
+const MAX_LOCKED_BASES = 128;
 
 const I18N = {
   en: {
@@ -212,9 +213,9 @@ export default class LockBasesView extends Plugin {
       void this.syncActiveBasesViewState();
     }));
 
-    window.setTimeout(() => {
+    this.app.workspace.onLayoutReady(() => {
       void this.syncActiveBasesViewState();
-    }, 200);
+    });
   }
 
   onunload(): void {
@@ -293,10 +294,9 @@ export default class LockBasesView extends Plugin {
     if (activeFile && /\.base$/i.test(activeFile.path)) {
       return activeFile.path;
     }
-    const titleEl = view.containerEl && view.containerEl.querySelector('.view-header-title');
-    const title = titleEl ? (titleEl.textContent || '').trim() : '';
-    const type = view.getViewType && typeof view.getViewType === 'function' ? String(view.getViewType()) : 'bases';
-    return title ? `${type}:${title}` : type;
+    // Only persist stable file-backed views. Ephemeral Bases views stay runtime-only
+    // to avoid key collisions and stale entries in data.json.
+    return null;
   }
 
   isPersistedLocked(view: BasesView): boolean {
@@ -318,12 +318,20 @@ export default class LockBasesView extends Plugin {
     if (!this.settings.lockedBases) {
       this.settings.lockedBases = {};
     }
+
     if (locked) {
+      delete this.settings.lockedBases[key];
       this.settings.lockedBases[key] = true;
+
+      const keys = Object.keys(this.settings.lockedBases);
+      if (keys.length > MAX_LOCKED_BASES) {
+        delete this.settings.lockedBases[keys[0]];
+      }
     } else {
       delete this.settings.lockedBases[key];
     }
-    await this.saveData(this.settings);
+
+    await this.saveSettings();
   }
 
   syncActiveBasesViewState(): void {
@@ -380,7 +388,8 @@ export default class LockBasesView extends Plugin {
       if (view.containerEl.querySelector('.bases-view')) {
         return true;
       }
-    } catch {
+    } catch (error) {
+      void error;
       return false;
     }
     return false;
@@ -427,8 +436,8 @@ export default class LockBasesView extends Plugin {
     }
     try {
       active.blur();
-    } catch {
-      void 0;
+    } catch (error) {
+      void error;
     }
     try {
       if (window.getSelection) {
@@ -437,8 +446,8 @@ export default class LockBasesView extends Plugin {
           selection.removeAllRanges();
         }
       }
-    } catch {
-      void 0;
+    } catch (error) {
+      void error;
     }
   }
 
@@ -452,7 +461,6 @@ export default class LockBasesView extends Plugin {
         return;
       }
       state.processed.add(el);
-      state.disabledCells.push(el);
     };
 
     const editorCells = Array.from(root.querySelectorAll('.bases-table-cell:not(.bases-rendered-value)'));
@@ -480,7 +488,6 @@ export default class LockBasesView extends Plugin {
     const basesRoot = container.querySelector<HTMLElement>('.bases-view') || container;
 
     const state: LockState = {
-      disabledCells: [],
       processed: new WeakSet(),
       handlers: [],
     };
@@ -525,6 +532,7 @@ export default class LockBasesView extends Plugin {
     });
 
     state.observer = observer;
+    observer.observe(basesRoot, { childList: true, subtree: true });
     this.basesObservers.set(container, observer);
     this.basesListeners.set(container, state);
     this.basesLocks.add(view);
@@ -559,14 +567,10 @@ export default class LockBasesView extends Plugin {
       }
     }
 
-    const disabledCells = state ? state.disabledCells : [];
-    for (const cell of disabledCells) {
-      try {
-        cell?.classList.remove('lock-bases-editor-cell-disabled');
-      } catch {
-        void 0;
-      }
-    }
+    const lockedCells = container.querySelectorAll('.lock-bases-editor-cell-disabled');
+    lockedCells.forEach((cell) => {
+      cell.classList.remove('lock-bases-editor-cell-disabled');
+    });
 
     this.basesListeners.delete(container);
     this.basesLocks.delete(view);
@@ -613,5 +617,3 @@ class LockBasesViewSettingTab extends PluginSettingTab {
         }));
   }
 }
-
-

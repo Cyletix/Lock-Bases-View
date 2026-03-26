@@ -1,7 +1,7 @@
 {
   "id": "lock-bases-view",
   "name": "Lock Bases View",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.8.0",
   "description": "Lock editing interactions in Bases views and persist lock state per .base file.",
   "author": "Cyletix",

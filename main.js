@@ -27,6 +27,7 @@ var DEFAULT_SETTINGS = {
   lockedBases: {},
   lockCheckboxes: true
 };
+var MAX_LOCKED_BASES = 128;
 var I18N = {
   en: {
     commandToggleBasesLock: "Toggle Bases view lock",
@@ -192,9 +193,9 @@ var LockBasesView = class extends import_obsidian.Plugin {
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       void this.syncActiveBasesViewState();
     }));
-    window.setTimeout(() => {
+    this.app.workspace.onLayoutReady(() => {
       void this.syncActiveBasesViewState();
-    }, 200);
+    });
   }
   onunload() {
     for (const view of this.getOpenBasesViews()) {
@@ -262,10 +263,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
     if (activeFile && /\.base$/i.test(activeFile.path)) {
       return activeFile.path;
     }
-    const titleEl = view.containerEl && view.containerEl.querySelector(".view-header-title");
-    const title = titleEl ? (titleEl.textContent || "").trim() : "";
-    const type = view.getViewType && typeof view.getViewType === "function" ? String(view.getViewType()) : "bases";
-    return title ? `${type}:${title}` : type;
+    return null;
   }
   isPersistedLocked(view) {
     const key = this.getBasesKey(view);
@@ -286,11 +284,16 @@ var LockBasesView = class extends import_obsidian.Plugin {
       this.settings.lockedBases = {};
     }
     if (locked) {
+      delete this.settings.lockedBases[key];
       this.settings.lockedBases[key] = true;
+      const keys = Object.keys(this.settings.lockedBases);
+      if (keys.length > MAX_LOCKED_BASES) {
+        delete this.settings.lockedBases[keys[0]];
+      }
     } else {
       delete this.settings.lockedBases[key];
     }
-    await this.saveData(this.settings);
+    await this.saveSettings();
   }
   syncActiveBasesViewState() {
     const view = this.getActiveBasesView();
@@ -342,7 +345,8 @@ var LockBasesView = class extends import_obsidian.Plugin {
       if (view.containerEl.querySelector(".bases-view")) {
         return true;
       }
-    } catch (e) {
+    } catch (error) {
+      void error;
       return false;
     }
     return false;
@@ -386,7 +390,8 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }
     try {
       active.blur();
-    } catch (e) {
+    } catch (error) {
+      void error;
     }
     try {
       if (window.getSelection) {
@@ -395,7 +400,8 @@ var LockBasesView = class extends import_obsidian.Plugin {
           selection.removeAllRanges();
         }
       }
-    } catch (e) {
+    } catch (error) {
+      void error;
     }
   }
   applyLockDecorations(root, state) {
@@ -407,7 +413,6 @@ var LockBasesView = class extends import_obsidian.Plugin {
         return;
       }
       state.processed.add(el);
-      state.disabledCells.push(el);
     };
     const editorCells = Array.from(root.querySelectorAll(".bases-table-cell:not(.bases-rendered-value)"));
     for (const cell of editorCells) {
@@ -430,7 +435,6 @@ var LockBasesView = class extends import_obsidian.Plugin {
     container.classList.add("lock-bases-view-locked");
     const basesRoot = container.querySelector(".bases-view") || container;
     const state = {
-      disabledCells: [],
       processed: /* @__PURE__ */ new WeakSet(),
       handlers: []
     };
@@ -470,6 +474,7 @@ var LockBasesView = class extends import_obsidian.Plugin {
       }
     });
     state.observer = observer;
+    observer.observe(basesRoot, { childList: true, subtree: true });
     this.basesObservers.set(container, observer);
     this.basesListeners.set(container, state);
     this.basesLocks.add(view);
@@ -499,13 +504,10 @@ var LockBasesView = class extends import_obsidian.Plugin {
         basesRoot.removeEventListener(item.name, item.handler, true);
       }
     }
-    const disabledCells = state ? state.disabledCells : [];
-    for (const cell of disabledCells) {
-      try {
-        cell == null ? void 0 : cell.classList.remove("lock-bases-editor-cell-disabled");
-      } catch (e) {
-      }
-    }
+    const lockedCells = container.querySelectorAll(".lock-bases-editor-cell-disabled");
+    lockedCells.forEach((cell) => {
+      cell.classList.remove("lock-bases-editor-cell-disabled");
+    });
     this.basesListeners.delete(container);
     this.basesLocks.delete(view);
     this.updateTitleButton();
