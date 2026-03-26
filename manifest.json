@@ -1,0 +1,11 @@
+{
+  "id": "lock-bases-view",
+  "name": "Lock Bases View",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.0",
+  "description": "Lock editing interactions in Obsidian Bases views and persist lock state per .base file.",
+  "author": "Cyletix",
+  "authorUrl": "",
+  "isDesktopOnly": false,
+  "main": "main.js"
+}
