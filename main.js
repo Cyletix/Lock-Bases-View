@@ -169,10 +169,6 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }, 200);
   }
   onunload() {
-    const style = document.getElementById("lock-bases-view-style");
-    if (style && style.parentNode) {
-      style.parentNode.removeChild(style);
-    }
     this.basesObservers = /* @__PURE__ */ new WeakMap();
     this.basesListeners = /* @__PURE__ */ new WeakMap();
     this.basesLocks = /* @__PURE__ */ new WeakSet();
@@ -431,44 +427,6 @@ var LockBasesView = class extends import_obsidian.Plugin {
     }
     container.classList.add("lock-bases-view-locked");
     const basesRoot = container.querySelector(".bases-view") || container;
-    if (!document.getElementById("lock-bases-view-style")) {
-      const style = document.createElement("style");
-      style.id = "lock-bases-view-style";
-      style.textContent = `
-        .lock-bases-view-locked .bases-view .multi-select-pill {
-          background-color: var(--tag-background) !important;
-          color: var(--tag-color) !important;
-          border: none !important;
-          box-shadow: none !important;
-          border-radius: var(--tag-radius, 999px) !important;
-          padding: 0 var(--size-2-2, 0.45em) !important;
-          gap: 0 !important;
-        }
-        .lock-bases-view-locked .bases-view .multi-select-pill,
-        .lock-bases-view-locked .bases-view .multi-select-pill *:not(.multi-select-pill-remove-button) {
-          color: var(--tag-color) !important;
-        }
-        .lock-bases-view-locked .bases-view .multi-select-pill:hover {
-          background-color: var(--tag-background-hover, var(--tag-background)) !important;
-          color: var(--tag-color-hover, var(--tag-color)) !important;
-        }
-        .lock-bases-view-locked .bases-view .multi-select-pill-remove-button {
-          display: none !important;
-          width: 0 !important;
-          min-width: 0 !important;
-          margin: 0 !important;
-          padding: 0 !important;
-          overflow: hidden !important;
-          flex: 0 0 0 !important;
-        }
-        .lock-bases-view-locked .bases-view input,
-        .lock-bases-view-locked .bases-view textarea,
-        .lock-bases-view-locked .bases-view [contenteditable="true"] {
-          user-select: none !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
     const state = {
       changed: [],
       processed: /* @__PURE__ */ new WeakSet(),
