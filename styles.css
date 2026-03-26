@@ -4,7 +4,7 @@
    border: none !important;
    box-shadow: none !important;
    border-radius: var(--tag-radius, 999px) !important;
-   padding: 0 var(--size-2-2, 0.45em) !important;
+   padding: 2px 8px !important;
    gap: 0 !important;
 }
 
@@ -30,6 +30,5 @@
 
 .lock-bases-view-locked .bases-view .lock-bases-editor-cell-disabled {
    pointer-events: none !important;
-   box-sizing: border-box;
-   padding-inline: var(--size-4-2, 8px) !important;
 }
+
