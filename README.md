@@ -9,6 +9,12 @@ An Obsidian plugin that prevents editing interactions inside Bases views and rem
 - Add a toolbar button to toggle lock state quickly.
 - Follow the current Obsidian language for visible UI text.
 
+## Compatibility
+
+- Requires the Obsidian core plugin `Bases`.
+- Tested on desktop, Android, and iOS.
+- Mobile support has been verified for locking, unlocking, and optional checkbox interaction while locked.
+
 ## Settings
 
 - `Lock checkboxes`: enabled by default.
