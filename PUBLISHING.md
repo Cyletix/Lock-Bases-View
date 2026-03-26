@@ -60,7 +60,7 @@ Add an entry to `community-plugins.json` using this structure:
   "id": "lock-bases-view",
   "name": "Lock Bases View",
   "author": "<Your Name>",
-  "description": "Lock editing interactions in Obsidian Bases views and persist lock state per .base file.",
+  "description": "Lock editing interactions in Bases views and persist lock state per .base file.",
   "repo": "<your-github-name>/<your-repo-name>"
 }
 ```
@@ -92,7 +92,7 @@ Add plugin: Lock Bases View
 
 ## Description
 
-Lock editing interactions in Obsidian Bases views and persist lock state per .base file.
+Lock editing interactions in Bases views and persist lock state per .base file.
 ```
 
 ## 7. PR notes

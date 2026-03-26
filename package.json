@@ -1,7 +1,7 @@
 {
   "name": "lock-bases-view",
   "version": "0.1.0",
-  "description": "Obsidian plugin that locks editing in Bases views and remembers lock state per .base file.",
+  "description": "Lock editing interactions in Bases views and persist lock state per .base file.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
