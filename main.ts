@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { getLanguage, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { getLanguage, Notice, Plugin, PluginSettingTab, setIcon, Setting } from 'obsidian';
 
 const DEFAULT_SETTINGS = {
   lockedBases: {},
@@ -267,17 +267,17 @@ export default class LockBasesView extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async syncActiveBasesViewState() {
+  syncActiveBasesViewState() {
     const view = this.getActiveBasesView();
     if (!view || !this.isBasesView(view)) {
       return;
     }
     if (this.isPersistedLocked(view)) {
       if (!this.basesLocks.has(view)) {
-        this.lockBases(view, { silent: true, persist: false });
+        void this.lockBases(view, { silent: true, persist: false });
       }
     } else if (this.basesLocks.has(view)) {
-      this.unlockBases(view, { silent: true, persist: false });
+      void this.unlockBases(view, { silent: true, persist: false });
     }
     this.updateTitleButton();
   }
@@ -285,7 +285,8 @@ export default class LockBasesView extends Plugin {
   updateToolbarButtonState(button, isLocked) {
     const icon = button.querySelector('.text-button-icon');
     if (icon) {
-      icon.innerHTML = isLocked ? this.getLockSvg() : this.getUnlockSvg();
+      icon.replaceChildren();
+      setIcon(icon, isLocked ? 'lock' : 'lock-open');
     }
     const label = isLocked ? this.t('basesViewLocked') : this.t('basesViewUnlocked');
     button.setAttribute('aria-label', label);
@@ -293,26 +294,21 @@ export default class LockBasesView extends Plugin {
     button.classList.toggle('is-active', isLocked);
   }
 
-  getLockSvg() {
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-lock"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-  }
-
-  getUnlockSvg() {
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-lock-open"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>';
-  }
-
   getActiveBasesView() {
     const workspace = this.app.workspace;
-    const directLeaf = workspace.activeLeaf;
-    if (directLeaf && directLeaf.view && this.isBasesView(directLeaf.view)) {
-      return directLeaf.view;
+    for (const view of this.getOpenBasesViews()) {
+      const workspaceLeaf = view.containerEl?.closest('.workspace-leaf');
+      if (workspaceLeaf?.classList.contains('mod-active')) {
+        return view;
+      }
     }
 
-    if (directLeaf && directLeaf.view) {
-      return directLeaf.view;
+    const recentLeaf = workspace.getMostRecentLeaf();
+    if (recentLeaf?.view && this.isBasesView(recentLeaf.view)) {
+      return recentLeaf.view;
     }
 
-    return null;
+    return this.getOpenBasesViews()[0] || null;
   }
 
   isBasesView(view) {
@@ -330,7 +326,9 @@ export default class LockBasesView extends Plugin {
       if (view.containerEl.querySelector('.bases-view')) {
         return true;
       }
-    } catch (error) {}
+    } catch {
+      return false;
+    }
     return false;
   }
 
@@ -375,7 +373,9 @@ export default class LockBasesView extends Plugin {
     }
     try {
       active.blur();
-    } catch (error) {}
+    } catch {
+      void 0;
+    }
     try {
       if (window.getSelection) {
         const selection = window.getSelection();
@@ -383,7 +383,9 @@ export default class LockBasesView extends Plugin {
           selection.removeAllRanges();
         }
       }
-    } catch (error) {}
+    } catch {
+      void 0;
+    }
   }
 
   applyLockDecorations(root, state) {
@@ -391,36 +393,13 @@ export default class LockBasesView extends Plugin {
       return;
     }
 
-    const remember = (el, snapshot) => {
+    const remember = (el) => {
       if (!el || state.processed.has(el)) {
         return;
       }
       state.processed.add(el);
-      state.changed.push({ el, ...snapshot });
+      state.disabledCells.push(el);
     };
-
-    const removeButtons = root.querySelectorAll('.multi-select-pill-remove-button');
-    for (const button of removeButtons) {
-      remember(button, {
-        kind: 'removeButton',
-        display: button.style.display,
-        width: button.style.width,
-        minWidth: button.style.minWidth,
-        margin: button.style.margin,
-        padding: button.style.padding,
-        overflow: button.style.overflow,
-        flex: button.style.flex,
-        pointerEvents: button.style.pointerEvents,
-      });
-      button.style.display = 'none';
-      button.style.width = '0';
-      button.style.minWidth = '0';
-      button.style.margin = '0';
-      button.style.padding = '0';
-      button.style.overflow = 'hidden';
-      button.style.flex = '0 0 0';
-      button.style.pointerEvents = 'none';
-    }
 
     const editorCells = root.querySelectorAll('.bases-table-cell:not(.bases-rendered-value)');
     for (const cell of editorCells) {
@@ -430,11 +409,8 @@ export default class LockBasesView extends Plugin {
       if (!this.hasBlockedEditableContent(cell)) {
         continue;
       }
-      remember(cell, {
-        kind: 'editorCell',
-        pointerEvents: cell.style.pointerEvents,
-      });
-      cell.style.pointerEvents = 'none';
+      remember(cell);
+      cell.classList.add('lock-bases-editor-cell-disabled');
     }
 
   }
@@ -450,7 +426,7 @@ export default class LockBasesView extends Plugin {
     const basesRoot = container.querySelector('.bases-view') || container;
 
     const state = {
-      changed: [],
+      disabledCells: [],
       processed: new WeakSet(),
       handlers: [],
     };
@@ -531,27 +507,13 @@ export default class LockBasesView extends Plugin {
       }
     }
 
-    const changed = state ? state.changed : [];
-    for (const prev of changed) {
+    const disabledCells = state ? state.disabledCells : [];
+    for (const cell of disabledCells) {
       try {
-        const el = prev.el;
-        if (!el) {
-          continue;
-        }
-        const tag = el.tagName ? el.tagName.toLowerCase() : '';
-        if (prev.kind === 'removeButton') {
-          el.style.display = prev.display || '';
-          el.style.width = prev.width || '';
-          el.style.minWidth = prev.minWidth || '';
-          el.style.margin = prev.margin || '';
-          el.style.padding = prev.padding || '';
-          el.style.overflow = prev.overflow || '';
-          el.style.flex = prev.flex || '';
-          el.style.pointerEvents = prev.pointerEvents || '';
-        } else if (prev.kind === 'editorCell') {
-          el.style.pointerEvents = prev.pointerEvents || '';
-        }
-      } catch (error) {}
+        cell?.classList.remove('lock-bases-editor-cell-disabled');
+      } catch {
+        void 0;
+      }
     }
 
     this.basesListeners.delete(container);

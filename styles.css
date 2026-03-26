@@ -33,3 +33,7 @@
 .lock-bases-view-locked .bases-view [contenteditable="true"] {
    user-select: none !important;
 }
+
+.lock-bases-view-locked .bases-view .lock-bases-editor-cell-disabled {
+   pointer-events: none !important;
+}
