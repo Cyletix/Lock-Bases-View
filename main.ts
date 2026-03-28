@@ -73,6 +73,9 @@ export default class LockBasesView extends Plugin {
   basesObservers = new WeakMap<HTMLElement, MutationObserver>();
   basesListeners = new WeakMap<HTMLElement, LockState>();
   basesLocks = new WeakSet<BasesView>();
+  embeddedObservers = new WeakMap<HTMLElement, MutationObserver>();
+  embeddedListeners = new WeakMap<HTMLElement, LockState>();
+  embeddedLocks = new WeakSet<HTMLElement>();
 
   getLocale(): Locale {
     const language = String(getLanguage() || 'en').toLowerCase();
@@ -160,6 +163,7 @@ export default class LockBasesView extends Plugin {
         await this.lockBases(view, { silent: true, persist: false });
       }
     }
+    await this.refreshEmbeddedBasesLocks();
     this.updateTitleButton();
   }
 
@@ -167,6 +171,9 @@ export default class LockBasesView extends Plugin {
     this.basesObservers = new WeakMap<HTMLElement, MutationObserver>();
     this.basesListeners = new WeakMap<HTMLElement, LockState>();
     this.basesLocks = new WeakSet<BasesView>();
+    this.embeddedObservers = new WeakMap<HTMLElement, MutationObserver>();
+    this.embeddedListeners = new WeakMap<HTMLElement, LockState>();
+    this.embeddedLocks = new WeakSet<HTMLElement>();
 
     const loaded = (await this.loadData()) as Partial<LockBasesViewSettings> | null;
     this.settings = {
@@ -222,10 +229,16 @@ export default class LockBasesView extends Plugin {
     for (const view of this.getOpenBasesViews()) {
       this.cleanupViewLock(view);
     }
+    document.querySelectorAll('.internal-embed.bases-embed, .internal-embed.bases-embed.is-loaded').forEach((el) => {
+      this.cleanupEmbeddedLock(el as HTMLElement);
+    });
     document.querySelectorAll('.lock-bases-toolbar-item').forEach((el) => el.remove());
     this.basesObservers = new WeakMap<HTMLElement, MutationObserver>();
     this.basesListeners = new WeakMap<HTMLElement, LockState>();
     this.basesLocks = new WeakSet<BasesView>();
+    this.embeddedObservers = new WeakMap<HTMLElement, MutationObserver>();
+    this.embeddedListeners = new WeakMap<HTMLElement, LockState>();
+    this.embeddedLocks = new WeakSet<HTMLElement>();
   }
 
   updateTitleButton(): void {
@@ -241,7 +254,7 @@ export default class LockBasesView extends Plugin {
 
     const existingBtn = toolbar.querySelector<HTMLElement>('.lock-bases-btn');
     if (existingBtn instanceof HTMLElement) {
-      this.updateToolbarButtonState(existingBtn, this.basesLocks.has(view));
+      this.updateToolbarButtonState(existingBtn, this.isActuallyLocked(view.containerEl));
       const existingItem = existingBtn.closest('.lock-bases-toolbar-item');
       const resultsItem = toolbar.querySelector('.bases-toolbar-results-menu');
       if (existingItem && resultsItem && existingItem.previousElementSibling !== resultsItem) {
@@ -260,7 +273,7 @@ export default class LockBasesView extends Plugin {
     const icon = document.createElement('span');
     icon.className = 'text-button-icon';
     btn.appendChild(icon);
-    this.updateToolbarButtonState(btn, this.basesLocks.has(view));
+    this.updateToolbarButtonState(btn, this.isActuallyLocked(view.containerEl));
 
     const triggerToggle = () => {
       void this.toggleBasesLock(view);
@@ -294,8 +307,6 @@ export default class LockBasesView extends Plugin {
     if (activeFile && /\.base$/i.test(activeFile.path)) {
       return activeFile.path;
     }
-    // Only persist stable file-backed views. Ephemeral Bases views stay runtime-only
-    // to avoid key collisions and stale entries in data.json.
     return null;
   }
 
@@ -312,6 +323,10 @@ export default class LockBasesView extends Plugin {
     if (!key) {
       return;
     }
+    await this.setPersistedLockedKey(key, locked);
+  }
+
+  async setPersistedLockedKey(key: string, locked: boolean): Promise<void> {
     if (!this.settings) {
       this.settings = { ...DEFAULT_SETTINGS };
     }
@@ -336,17 +351,227 @@ export default class LockBasesView extends Plugin {
 
   syncActiveBasesViewState(): void {
     const view = this.getActiveBasesView();
-    if (!view || !this.isBasesView(view)) {
+    if (view && this.isBasesView(view)) {
+      if (this.isPersistedLocked(view)) {
+        if (!this.basesLocks.has(view)) {
+          void this.lockBases(view, { silent: true, persist: false });
+        }
+      } else if (this.basesLocks.has(view)) {
+        void this.unlockBases(view, { silent: true, persist: false });
+      }
+    }
+    void this.refreshEmbeddedBasesLocks();
+    this.updateTitleButton();
+  }
+
+  async refreshEmbeddedBasesLocks(): Promise<void> {
+    const roots = this.getEmbeddedBasesRoots();
+    for (const root of roots) {
+      const key = this.getEmbeddedBasesKey(root);
+      if (!key) {
+        continue;
+      }
+      if (this.isPersistedLockedKey(key)) {
+        if (!this.embeddedLocks.has(root)) {
+          await this.lockEmbeddedBases(root, key, { silent: true, persist: false });
+        }
+      } else if (this.embeddedLocks.has(root)) {
+        await this.unlockEmbeddedBases(root, key, { silent: true, persist: false });
+      }
+    }
+    this.updateEmbeddedToolbarButtons();
+  }
+
+  getEmbeddedBasesRoots(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('.internal-embed.bases-embed.is-loaded, .internal-embed.bases-embed'));
+  }
+
+  getEmbeddedBasesKey(root: HTMLElement | null | undefined): string | null {
+    if (!root) {
+      return null;
+    }
+    const src = root.getAttribute('src') || root.getAttribute('alt');
+    if (!src) {
+      return null;
+    }
+    return /\.base$/i.test(src) ? src : null;
+  }
+
+  isPersistedLockedKey(key: string): boolean {
+    return !!(this.settings && this.settings.lockedBases && this.settings.lockedBases[key]);
+  }
+
+  isActuallyLocked(root: Element | null | undefined): boolean {
+    if (!root || !(root instanceof Element)) {
+      return false;
+    }
+    return root.classList.contains('lock-bases-view-locked') || !!root.querySelector('.lock-bases-editor-cell-disabled');
+  }
+
+  updateEmbeddedToolbarButtons(): void {
+    const roots = this.getEmbeddedBasesRoots();
+    for (const root of roots) {
+      const key = this.getEmbeddedBasesKey(root);
+      if (!key) {
+        continue;
+      }
+      const toolbar = root.querySelector('.bases-toolbar');
+      if (!toolbar) {
+        continue;
+      }
+      const existingBtn = toolbar.querySelector<HTMLElement>('.lock-bases-btn');
+      const isLocked = this.isActuallyLocked(root);
+      if (existingBtn instanceof HTMLElement) {
+        this.updateToolbarButtonState(existingBtn, isLocked);
+        continue;
+      }
+
+      const item = document.createElement('div');
+      item.className = 'bases-toolbar-item lock-bases-toolbar-item';
+
+      const btn = document.createElement('div');
+      btn.className = 'text-icon-button lock-bases-btn';
+      btn.tabIndex = 0;
+
+      const icon = document.createElement('span');
+      icon.className = 'text-button-icon';
+      btn.appendChild(icon);
+      this.updateToolbarButtonState(btn, isLocked);
+
+      const triggerToggle = () => {
+        const locked = this.isActuallyLocked(root);
+        void (locked ? this.unlockEmbeddedBases(root, key) : this.lockEmbeddedBases(root, key));
+      };
+      btn.addEventListener('click', triggerToggle);
+      btn.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          triggerToggle();
+        }
+      });
+
+      item.appendChild(btn);
+      const resultsItem = toolbar.querySelector('.bases-toolbar-results-menu');
+      if (resultsItem && resultsItem.parentNode === toolbar) {
+        resultsItem.insertAdjacentElement('afterend', item);
+      } else {
+        toolbar.appendChild(item);
+      }
+    }
+  }
+
+  async lockEmbeddedBases(root: HTMLElement, key: string, options: LockOptions = {}): Promise<void> {
+    const { silent = false, persist = true } = options;
+    const basesRoot = root.querySelector<HTMLElement>('.bases-view') || root;
+    if (!root) {
       return;
     }
-    if (this.isPersistedLocked(view)) {
-      if (!this.basesLocks.has(view)) {
-        void this.lockBases(view, { silent: true, persist: false });
+
+    root.classList.add('lock-bases-view-locked');
+
+    const state: LockState = {
+      processed: new WeakSet(),
+      handlers: [],
+    };
+
+    this.applyLockDecorations(basesRoot, state);
+    this.releaseEditableFocus(basesRoot);
+
+    const stopEvent: EventListener = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
       }
-    } else if (this.basesLocks.has(view)) {
-      void this.unlockBases(view, { silent: true, persist: false });
+      if (!basesRoot.contains(target)) {
+        return;
+      }
+      if (!this.isEditableElement(target)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+      this.releaseEditableFocus(basesRoot, target);
+    };
+
+    const eventNames = ['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick', 'focusin', 'keydown', 'beforeinput', 'input', 'compositionstart', 'paste', 'cut', 'drop', 'touchstart'];
+    for (const name of eventNames) {
+      basesRoot.addEventListener(name, stopEvent, true);
+      state.handlers.push({ name, handler: stopEvent });
     }
-    this.updateTitleButton();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
+          this.applyLockDecorations(node, state);
+        }
+      }
+    });
+
+    state.observer = observer;
+    observer.observe(basesRoot, { childList: true, subtree: true });
+    this.embeddedObservers.set(root, observer);
+    this.embeddedListeners.set(root, state);
+    this.embeddedLocks.add(root);
+    if (persist) {
+      await this.setPersistedLockedKey(key, true);
+      await this.refreshOpenBasesLocks();
+      await this.refreshEmbeddedBasesLocks();
+    }
+    if (!silent) {
+      new Notice(this.t('noticeLockEnabled'));
+    }
+    this.updateEmbeddedToolbarButtons();
+  }
+
+  cleanupEmbeddedLock(root: HTMLElement | null | undefined): void {
+    if (!root) {
+      return;
+    }
+
+    root.classList.remove('lock-bases-view-locked');
+
+    const observer = this.embeddedObservers.get(root);
+    if (observer) {
+      observer.disconnect();
+    }
+    this.embeddedObservers.delete(root);
+
+    const state = this.embeddedListeners.get(root);
+    if (state && Array.isArray(state.handlers)) {
+      const basesRoot = root.querySelector<HTMLElement>('.bases-view') || root;
+      for (const item of state.handlers) {
+        basesRoot.removeEventListener(item.name, item.handler, true);
+      }
+    }
+
+    const lockedCells = root.querySelectorAll('.lock-bases-editor-cell-disabled');
+    lockedCells.forEach((cell) => {
+      cell.classList.remove('lock-bases-editor-cell-disabled');
+    });
+
+    this.embeddedListeners.delete(root);
+    this.embeddedLocks.delete(root);
+    this.updateEmbeddedToolbarButtons();
+  }
+
+  async unlockEmbeddedBases(root: HTMLElement, key: string, options: LockOptions = {}): Promise<void> {
+    const { silent = false, persist = true } = options;
+    this.cleanupEmbeddedLock(root);
+    if (persist) {
+      await this.setPersistedLockedKey(key, false);
+      await this.refreshOpenBasesLocks();
+      await this.refreshEmbeddedBasesLocks();
+    }
+    if (!silent) {
+      new Notice(this.t('noticeLockDisabled'));
+    }
+    this.updateEmbeddedToolbarButtons();
   }
 
   updateToolbarButtonState(button: HTMLElement, isLocked: boolean): void {
@@ -538,6 +763,7 @@ export default class LockBasesView extends Plugin {
     this.basesLocks.add(view);
     if (persist) {
       await this.setPersistedLocked(view, true);
+      await this.refreshEmbeddedBasesLocks();
     }
     if (!silent) {
       new Notice(this.t('noticeLockEnabled'));
@@ -585,6 +811,7 @@ export default class LockBasesView extends Plugin {
     this.cleanupViewLock(view);
     if (persist) {
       await this.setPersistedLocked(view, false);
+      await this.refreshEmbeddedBasesLocks();
     }
     if (!silent) {
       new Notice(this.t('noticeLockDisabled'));

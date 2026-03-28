@@ -1,6 +1,6 @@
 {
   "name": "lock-bases-view",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Lock editing interactions in Bases views and persist lock state per .base file.",
   "main": "main.js",
   "scripts": {
