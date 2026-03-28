@@ -1,6 +1,6 @@
 # Lock Bases View
 
-An Obsidian plugin that prevents editing interactions inside Bases views and remembers the lock state per `.base` file.
+An Obsidian plugin that prevents editing interactions inside Bases views by adding a button in toolbar and remembers the lock state per `.base` file.
 
 ## Features
 
@@ -8,6 +8,23 @@ An Obsidian plugin that prevents editing interactions inside Bases views and rem
 - Remember the lock state for each `.base` file.
 - Add a toolbar button to toggle lock state quickly.
 - Follow the current Obsidian language for visible UI text.
+
+## Latest release
+
+### v0.1.2
+
+Compared with `0.1.1`, this release focuses on a specific Markdown embed edge case and release readiness:
+
+- Fixed the Markdown preview edge case where embedded Bases could become editable after switching from edit mode to view mode.
+- Broadened Bases view detection to include embedded Bases wrappers inside Markdown previews.
+- Kept the `128`-entry cap for persisted lock records to prevent `lockedBases` from growing without bound.
+- Preserved the detached-DOM cleanup and `MutationObserver` behavior so newly added rows stay locked.
+- Kept startup synchronization on `workspace.onLayoutReady()` for better Obsidian compatibility.
+
+If you want a shorter GitHub release note, use:
+
+> This release fixes a Markdown preview edge case for embedded Bases and keeps the lock system stable.
+> It broadens Bases detection for embedded previews, preserves the 128-entry persisted-state cap, and keeps the existing leak and observer fixes in place.
 
 ## Compatibility
 
